@@ -16,7 +16,7 @@ const AudienceAgentHandbook = () => {
       setShowScrollTop(window.scrollY > 400);
 
       // Detect active section
-      const sections = ['intro', 'section1', 'section2', 'section3', 'section4', 'section5', 'quickref', 'quiz'];
+      const sections = ['intro', 'section1', 'section2', 'section3', 'section4', 'section5', 'section6', 'quickref', 'quiz'];
       const scrollPosition = window.scrollY + 200;
 
       for (const sectionId of sections) {
@@ -38,98 +38,319 @@ const AudienceAgentHandbook = () => {
 
   const analyzePrompt = (prompt) => {
     setIsAnalyzing(true);
-    
+
     // Simulate analysis delay
     setTimeout(() => {
       let score = 50;
       let feedback = [];
       let positives = [];
-      
+      let warnings = [];
+      let complexityFlags = {};
+
       const lowerPrompt = prompt.toLowerCase();
-      
-      // Positive indicators
-      if (lowerPrompt.includes('create') || lowerPrompt.includes('segment') || lowerPrompt.includes('analyze')) {
-        score += 10;
-        positives.push(language === 'en' ? 'Clear objective stated' : 'Objetivo claro establecido');
+      const charCount = prompt.length;
+
+      // ============================================
+      // COMPLEXITY DETECTION - Check for overly complex prompts
+      // ============================================
+
+      // Character limit thresholds
+      const CHAR_LIMIT_WARNING = 500;
+      const CHAR_LIMIT_ERROR = 1500;
+
+      // Detect section headers (SECTION 0, SECTION 1, etc.)
+      const sectionMatches = prompt.match(/SECTION\s*\d+|SECTION\s*[A-Z]+\s*[–-]/gi) || [];
+      const sectionCount = sectionMatches.length;
+
+      // Detect execution rules and meta-instructions
+      const executionRulePatterns = /EXECUTION RULES|APPROVAL GATE|DO NOT BEGIN|STOP HERE|BEFORE PERFORMING|ASK FOR APPROVAL/gi;
+      const executionRuleMatches = prompt.match(executionRulePatterns) || [];
+      const hasExecutionRules = executionRuleMatches.length > 0;
+
+      // Detect multiple definitions/logic blocks
+      const definitionPatterns = /DEFINITION|DEFINE:|LOGIC|COHORT|WARRANTY|LOYALTY SEGMENT|REBUILD|DATASET/gi;
+      const definitionMatches = prompt.match(definitionPatterns) || [];
+      const definitionCount = definitionMatches.length;
+
+      // Detect segment rules - numbered items, criteria, conditions
+      const rulePatterns = /^\s*\d+\.\s+|^\s*[-•]\s+|\(\d+\)|criterion|criteria|condition|rule|filter|include only|exclude/gim;
+      const ruleMatches = prompt.match(rulePatterns) || [];
+      const ruleCount = ruleMatches.length;
+
+      // Detect multiple objectives
+      const objectivePatterns = /OBJECTIVE|ANALYSIS REQUIREMENTS|OUTPUT|ANALYSIS MODULE|REQUIREMENTS/gi;
+      const objectiveMatches = prompt.match(objectivePatterns) || [];
+      const objectiveCount = objectiveMatches.length;
+
+      // Detect table/field references
+      const tablePatterns = /table[s]?\s+|field[s]?\s+|dataset|_header|_order|ownership|segmentation/gi;
+      const tableMatches = prompt.match(tablePatterns) || [];
+      const tableCount = tableMatches.length;
+
+      // Calculate complexity score
+      let complexityScore = 0;
+      complexityScore += sectionCount * 15;
+      complexityScore += hasExecutionRules ? 25 : 0;
+      complexityScore += definitionCount * 8;
+      complexityScore += Math.max(0, ruleCount - 3) * 5;
+      complexityScore += Math.max(0, objectiveCount - 1) * 10;
+      complexityScore += charCount > CHAR_LIMIT_ERROR ? 30 : (charCount > CHAR_LIMIT_WARNING ? 15 : 0);
+
+      // Determine if prompt is too complex
+      const isTooComplex = complexityScore >= 40 || sectionCount >= 2 || hasExecutionRules;
+
+      // Calculate suggested sub-prompts
+      let suggestedSubPrompts = 1;
+      if (sectionCount >= 2) {
+        suggestedSubPrompts = Math.max(suggestedSubPrompts, sectionCount);
       }
-      
-      if (lowerPrompt.match(/\d+\s*(days?|weeks?|months?|años?|días?|meses?|semanas?)/)) {
-        score += 10;
-        positives.push(language === 'en' ? 'Specific timeframe included' : 'Marco temporal específico incluido');
+      if (definitionCount >= 3) {
+        suggestedSubPrompts = Math.max(suggestedSubPrompts, Math.ceil(definitionCount / 2));
       }
-      
-      if (lowerPrompt.match(/\$\d+|>\s*\d+|<\s*\d+|between\s+\d+/)) {
-        score += 10;
-        positives.push(language === 'en' ? 'Quantitative criteria specified' : 'Criterios cuantitativos especificados');
+      if (objectiveCount >= 2) {
+        suggestedSubPrompts = Math.max(suggestedSubPrompts, objectiveCount);
       }
-      
-      if ((lowerPrompt.match(/and|y/g) || []).length >= 2) {
-        score += 10;
-        positives.push(language === 'en' ? 'Multiple conditions defined' : 'Múltiples condiciones definidas');
+      if (ruleCount > 6) {
+        suggestedSubPrompts = Math.max(suggestedSubPrompts, Math.ceil(ruleCount / 3));
       }
-      
-      if (lowerPrompt.match(/auto insurance|home insurance|motorcycle|boat|rv|pet insurance|renters|condo|seguro de auto|seguro de hogar|motocicleta|自動車保険|住宅保険|バイク保険/) || lowerPrompt.match(/quote|coverage|policy|bundle|oem parts|comprehensive|collision|liability|cotización|cobertura|póliza|見積もり|補償|ポリシー/)) {
-        score += 5;
-        positives.push(language === 'en' ? 'Specific insurance products mentioned' : language === 'es' ? 'Productos de seguro específicos mencionados' : '具体的な保険商品が記載されている');
+
+      // Store complexity flags
+      complexityFlags = {
+        charCount,
+        charLimitWarning: CHAR_LIMIT_WARNING,
+        charLimitError: CHAR_LIMIT_ERROR,
+        sectionCount,
+        ruleCount,
+        definitionCount,
+        objectiveCount,
+        tableCount,
+        hasExecutionRules,
+        isTooComplex,
+        suggestedSubPrompts,
+        complexityScore
+      };
+
+      // ============================================
+      // COMPLEXITY WARNINGS & SCORE PENALTIES
+      // ============================================
+
+      if (isTooComplex) {
+        score = 0; // Reject the prompt entirely
+
+        if (language === 'en') {
+          warnings.push({
+            type: 'error',
+            title: 'Prompt Too Complex',
+            message: 'This prompt contains too many sections, rules, or meta-instructions. The Audience Agent works best with focused, single-objective prompts.'
+          });
+        } else {
+          warnings.push({
+            type: 'error',
+            title: 'プロンプトが複雑すぎます',
+            message: 'このプロンプトにはセクション、ルール、またはメタ指示が多すぎます。オーディエンスエージェントは、焦点を絞った単一目標のプロンプトで最も効果的に機能します。'
+          });
+        }
       }
-      
-      if (lowerPrompt.includes('email') || lowerPrompt.includes('correo') || lowerPrompt.includes('gmail') || lowerPrompt.includes('city') || lowerPrompt.includes('ciudad')) {
-        score += 5;
-        positives.push(language === 'en' ? 'Relevant data fields identified' : 'Campos de datos relevantes identificados');
-      }
-      
-      // Negative indicators
-      if (lowerPrompt.match(/maybe|perhaps|might|tal vez|quizás|posiblemente/)) {
-        score -= 10;
-        feedback.push(language === 'en' ? 'Remove uncertain language (maybe, perhaps)' : 'Eliminar lenguaje incierto (tal vez, quizás)');
-      }
-      
-      if (lowerPrompt.match(/good|better|best|mejores?|buenos?/)) {
-        score -= 10;
-        feedback.push(language === 'en' ? 'Avoid vague qualifiers - be specific' : 'Evitar calificadores vagos - ser específico');
-      }
-      
-      if (!lowerPrompt.match(/create|analyze|show|find|crea|analiza|muestra|encuentra/)) {
+
+      // Character limit warnings
+      if (charCount > CHAR_LIMIT_ERROR) {
+        score -= 30;
+        if (language === 'en') {
+          warnings.push({
+            type: 'error',
+            title: `Character Limit Exceeded (${charCount.toLocaleString()} / ${CHAR_LIMIT_ERROR} max)`,
+            message: 'Your prompt is far too long. Break it into smaller, focused requests.'
+          });
+        } else {
+          warnings.push({
+            type: 'error',
+            title: `文字数制限超過 (${charCount.toLocaleString()} / 最大${CHAR_LIMIT_ERROR})`,
+            message: 'プロンプトが長すぎます。小さく焦点を絞ったリクエストに分割してください。'
+          });
+        }
+      } else if (charCount > CHAR_LIMIT_WARNING) {
         score -= 15;
-        feedback.push(language === 'en' ? 'Start with a clear action verb' : 'Comenzar con un verbo de acción claro');
+        if (language === 'en') {
+          warnings.push({
+            type: 'warning',
+            title: `Prompt Length Warning (${charCount.toLocaleString()} / ${CHAR_LIMIT_WARNING} recommended)`,
+            message: 'Consider simplifying your prompt for better results.'
+          });
+        } else {
+          warnings.push({
+            type: 'warning',
+            title: `プロンプト長さ警告 (${charCount.toLocaleString()} / 推奨${CHAR_LIMIT_WARNING})`,
+            message: 'より良い結果のためにプロンプトを簡素化することを検討してください。'
+          });
+        }
       }
-      
-      if (prompt.length < 20) {
+
+      // Section count warnings
+      if (sectionCount >= 2) {
+        score -= 25;
+        if (language === 'en') {
+          warnings.push({
+            type: 'error',
+            title: `Multiple Sections Detected (${sectionCount} sections)`,
+            message: 'Prompts with multiple SECTION headers are too complex. Each section should be a separate prompt.'
+          });
+        } else {
+          warnings.push({
+            type: 'error',
+            title: `複数セクション検出 (${sectionCount}セクション)`,
+            message: '複数のSECTIONヘッダーを持つプロンプトは複雑すぎます。各セクションは別々のプロンプトにしてください。'
+          });
+        }
+      }
+
+      // Rule count warnings
+      if (ruleCount > 6) {
         score -= 15;
-        feedback.push(language === 'en' ? 'Prompt is too short - add more detail' : 'Prompt muy corto - agregar más detalle');
+        if (language === 'en') {
+          warnings.push({
+            type: 'warning',
+            title: `Too Many Rules (${ruleCount} rules detected)`,
+            message: 'Keep prompts to 3-5 rules maximum. Complex logic should be broken into multiple prompts.'
+          });
+        } else {
+          warnings.push({
+            type: 'warning',
+            title: `ルールが多すぎます (${ruleCount}ルール検出)`,
+            message: 'プロンプトは最大3〜5ルールに抑えてください。複雑なロジックは複数のプロンプトに分割してください。'
+          });
+        }
+      } else if (ruleCount > 3) {
+        if (language === 'en') {
+          feedback.push(`Consider simplifying: ${ruleCount} rules detected (3-5 recommended)`);
+        } else {
+          feedback.push(`簡素化を検討: ${ruleCount}ルール検出（3〜5推奨）`);
+        }
       }
-      
-      if (prompt.split(' ').length > 100) {
-        score -= 10;
-        feedback.push(language === 'en' ? 'Prompt is too long - break into steps' : 'Prompt muy largo - dividir en pasos');
+
+      // Execution rules / meta-instructions
+      if (hasExecutionRules) {
+        score -= 25;
+        if (language === 'en') {
+          warnings.push({
+            type: 'error',
+            title: 'Meta-Instructions Detected',
+            message: 'Avoid execution rules, approval gates, and meta-instructions. The Audience Agent works best with direct data requests.'
+          });
+        } else {
+          warnings.push({
+            type: 'error',
+            title: 'メタ指示が検出されました',
+            message: '実行ルール、承認ゲート、メタ指示は避けてください。オーディエンスエージェントは直接的なデータリクエストで最も効果的に機能します。'
+          });
+        }
       }
-      
+
+      // Multiple definitions
+      if (definitionCount >= 3) {
+        score -= 15;
+        if (language === 'en') {
+          warnings.push({
+            type: 'warning',
+            title: `Multiple Definitions (${definitionCount} found)`,
+            message: 'Too many custom definitions. Define one concept per prompt, then reference it in follow-up prompts.'
+          });
+        } else {
+          warnings.push({
+            type: 'warning',
+            title: `複数の定義 (${definitionCount}個発見)`,
+            message: 'カスタム定義が多すぎます。プロンプトごとに1つの概念を定義し、フォローアッププロンプトで参照してください。'
+          });
+        }
+      }
+
+      // ============================================
+      // POSITIVE INDICATORS (only if not too complex)
+      // ============================================
+
+      if (!isTooComplex) {
+        if (lowerPrompt.includes('create') || lowerPrompt.includes('segment') || lowerPrompt.includes('analyze')) {
+          score += 10;
+          positives.push(language === 'en' ? 'Clear objective stated' : '明確な目的が記載されている');
+        }
+
+        if (lowerPrompt.match(/\d+\s*(days?|weeks?|months?|años?|días?|meses?|semanas?|日|週|ヶ月)/)) {
+          score += 10;
+          positives.push(language === 'en' ? 'Specific timeframe included' : '具体的な期間が含まれている');
+        }
+
+        if (lowerPrompt.match(/\$\d+|>\s*\d+|<\s*\d+|between\s+\d+/)) {
+          score += 10;
+          positives.push(language === 'en' ? 'Quantitative criteria specified' : '定量的基準が指定されている');
+        }
+
+        if ((lowerPrompt.match(/\band\b|\bかつ\b/gi) || []).length >= 1 && (lowerPrompt.match(/\band\b|\bかつ\b/gi) || []).length <= 4) {
+          score += 10;
+          positives.push(language === 'en' ? 'Multiple conditions defined' : '複数の条件が定義されている');
+        }
+
+        if (lowerPrompt.match(/auto insurance|home insurance|motorcycle|boat|rv|pet insurance|renters|condo|自動車保険|住宅保険|バイク保険/) || lowerPrompt.match(/quote|coverage|policy|bundle|oem parts|comprehensive|collision|liability|見積もり|補償|ポリシー/)) {
+          score += 5;
+          positives.push(language === 'en' ? 'Specific insurance products mentioned' : '具体的な保険商品が記載されている');
+        }
+
+        if (lowerPrompt.includes('email') || lowerPrompt.includes('gmail') || lowerPrompt.includes('city') || lowerPrompt.includes('メール') || lowerPrompt.includes('都市')) {
+          score += 5;
+          positives.push(language === 'en' ? 'Relevant data fields identified' : '関連するデータフィールドが特定されている');
+        }
+
+        // Negative indicators
+        if (lowerPrompt.match(/maybe|perhaps|might|多分|おそらく/)) {
+          score -= 10;
+          feedback.push(language === 'en' ? 'Remove uncertain language (maybe, perhaps)' : '不確実な言葉を削除（多分、おそらく）');
+        }
+
+        if (lowerPrompt.match(/good|better|best|良い|より良い|最高/)) {
+          score -= 10;
+          feedback.push(language === 'en' ? 'Avoid vague qualifiers - be specific' : '曖昧な修飾語を避ける - 具体的に');
+        }
+
+        if (!lowerPrompt.match(/create|analyze|show|find|作成|分析|表示|検索/)) {
+          score -= 15;
+          feedback.push(language === 'en' ? 'Start with a clear action verb' : '明確なアクション動詞で始める');
+        }
+
+        if (prompt.length < 20) {
+          score -= 15;
+          feedback.push(language === 'en' ? 'Prompt is too short - add more detail' : 'プロンプトが短すぎます - 詳細を追加');
+        }
+      }
+
       // Cap score between 0 and 100
       score = Math.max(0, Math.min(100, score));
-      
+
       let rating = 'Poor';
       let color = 'red';
-      
-      if (score >= 80) {
-        rating = language === 'en' ? 'Excellent' : 'Excelente';
+
+      if (isTooComplex) {
+        rating = language === 'en' ? 'Too Complex - Break Down Required' : '複雑すぎます - 分割が必要';
+        color = 'red';
+      } else if (score >= 80) {
+        rating = language === 'en' ? 'Excellent' : '優秀';
         color = 'green';
       } else if (score >= 60) {
-        rating = language === 'en' ? 'Good' : 'Bueno';
+        rating = language === 'en' ? 'Good' : '良好';
         color = 'blue';
       } else if (score >= 40) {
-        rating = language === 'en' ? 'Fair' : 'Regular';
+        rating = language === 'en' ? 'Fair' : '普通';
         color = 'yellow';
       } else {
-        rating = language === 'en' ? 'Needs Improvement' : 'Necesita Mejora';
+        rating = language === 'en' ? 'Needs Improvement' : '改善が必要';
         color = 'red';
       }
-      
+
       setQuizResult({
         score,
         rating,
         color,
         feedback,
-        positives
+        positives,
+        warnings,
+        complexityFlags
       });
       setIsAnalyzing(false);
     }, 1000);
@@ -173,6 +394,7 @@ const AudienceAgentHandbook = () => {
           { id: 'section3', label: '3. Complex Rules' },
           { id: 'section4', label: '4. Text Matching' },
           { id: 'section5', label: '5. Insights' },
+          { id: 'section6', label: '6. Prompt Limits' },
           { id: 'quickref', label: 'Quick Reference' },
           { id: 'quiz', label: 'Test Your Skills' }
         ]
@@ -286,6 +508,40 @@ const AudienceAgentHandbook = () => {
             explanation: "No specific metrics, no timeframe, too vague, unclear what information is needed."
           }
         },
+        promptLimits: {
+          title: "6. Prompt Limits & Complexity Guidelines",
+          description: "The Audience Agent works best with focused, single-objective prompts. Avoid overly complex prompts that try to accomplish too much at once.",
+          limitsTitle: "Recommended Limits",
+          limits: [
+            { label: "Character Limit", value: "500", max: "1,500", description: "Keep prompts concise. Aim for under 500 characters, never exceed 1,500." },
+            { label: "Segment Rules", value: "3-5", max: "6", description: "Limit conditions per prompt. More rules = break into multiple prompts." },
+            { label: "Sections", value: "0", max: "1", description: "Avoid multi-section prompts. Each section should be a separate request." },
+            { label: "Definitions", value: "1-2", max: "2", description: "Define one concept at a time, then reference in follow-up prompts." }
+          ],
+          avoidTitle: "What to Avoid",
+          avoidItems: [
+            { title: "Meta-Instructions", description: "Phrases like 'EXECUTION RULES', 'APPROVAL GATE', 'DO NOT BEGIN', 'STOP HERE' confuse the agent." },
+            { title: "Multiple Objectives", description: "Don't combine analysis, segment creation, and reporting in one prompt." },
+            { title: "Complex Logical Chains", description: "Deeply nested AND/OR logic with many conditions should be simplified." },
+            { title: "Custom Data Definitions", description: "Avoid redefining loyalty segments, warranty logic, or cohort definitions inline." }
+          ],
+          breakdownTitle: "When to Break Down Prompts",
+          breakdownDescription: "If your prompt has any of these, consider splitting it:",
+          breakdownItems: [
+            "Multiple SECTION headers (SECTION 1, SECTION 2, etc.)",
+            "More than 5 numbered rules or conditions",
+            "Custom definitions for warranties, loyalty, or cohorts",
+            "Multiple analysis objectives or output requirements",
+            "Instructions about how to process the prompt itself"
+          ],
+          exampleTitle: "Example: Breaking Down a Complex Request",
+          exampleBad: "SECTION 1: Define loyalty segments based on RO history. SECTION 2: Apply warranty logic. SECTION 3: Analyze drop-off timing by brand.",
+          exampleGood: [
+            "Prompt 1: \"Create loyalty segments based on repair order frequency in the last 3 years: Elite (6+ ROs), Frequent (4-5), Occasional (3-4), Lapsed (2 or fewer).\"",
+            "Prompt 2: \"For the loyalty segments created, identify customers still within basic warranty (purchase date + 3 years or < 36,000 miles).\"",
+            "Prompt 3: \"Analyze service visit drop-off timing for each loyalty segment, comparing Honda vs Acura brands.\""
+          ]
+        },
         quickReference: {
           title: "Quick Reference: Prompt Structure Template",
           template: [
@@ -327,6 +583,7 @@ const AudienceAgentHandbook = () => {
           { id: 'section3', label: '3. 複雑なルール' },
           { id: 'section4', label: '4. テキストマッチング' },
           { id: 'section5', label: '5. インサイト' },
+          { id: 'section6', label: '6. プロンプト制限' },
           { id: 'quickref', label: 'クイックリファレンス' },
           { id: 'quiz', label: 'スキルをテスト' }
         ]
@@ -439,6 +696,40 @@ const AudienceAgentHandbook = () => {
             prompt: "保険セグメントについて教えてください、そして私たちが知るべきことは何ですか。",
             explanation: "具体的なメトリクスがない、期間がない、曖昧すぎる、必要な情報が不明確。"
           }
+        },
+        promptLimits: {
+          title: "6. プロンプト制限と複雑さのガイドライン",
+          description: "オーディエンスエージェントは、焦点を絞った単一目標のプロンプトで最も効果的に機能します。一度に多くのことを達成しようとする複雑すぎるプロンプトは避けてください。",
+          limitsTitle: "推奨される制限",
+          limits: [
+            { label: "文字数制限", value: "500", max: "1,500", description: "プロンプトは簡潔に。500文字以下を目標に、1,500文字を超えないこと。" },
+            { label: "セグメントルール", value: "3-5", max: "6", description: "プロンプトごとの条件を制限。ルールが多い場合は複数のプロンプトに分割。" },
+            { label: "セクション", value: "0", max: "1", description: "マルチセクションプロンプトを避ける。各セクションは別々のリクエストに。" },
+            { label: "定義", value: "1-2", max: "2", description: "一度に1つの概念を定義し、フォローアッププロンプトで参照。" }
+          ],
+          avoidTitle: "避けるべきこと",
+          avoidItems: [
+            { title: "メタ指示", description: "「EXECUTION RULES」「APPROVAL GATE」「DO NOT BEGIN」「STOP HERE」などのフレーズはエージェントを混乱させます。" },
+            { title: "複数の目的", description: "分析、セグメント作成、レポート作成を1つのプロンプトに組み合わせないでください。" },
+            { title: "複雑な論理チェーン", description: "多くの条件を持つ深くネストされたAND/ORロジックは簡素化する必要があります。" },
+            { title: "カスタムデータ定義", description: "ロイヤルティセグメント、保証ロジック、コホート定義をインラインで再定義することは避けてください。" }
+          ],
+          breakdownTitle: "プロンプトを分割すべき時",
+          breakdownDescription: "プロンプトに以下のいずれかがある場合は、分割を検討してください：",
+          breakdownItems: [
+            "複数のSECTIONヘッダー（SECTION 1、SECTION 2など）",
+            "5つ以上の番号付きルールまたは条件",
+            "保証、ロイヤルティ、コホートのカスタム定義",
+            "複数の分析目的または出力要件",
+            "プロンプト自体の処理方法に関する指示"
+          ],
+          exampleTitle: "例：複雑なリクエストの分割",
+          exampleBad: "SECTION 1: RO履歴に基づいてロイヤルティセグメントを定義。SECTION 2: 保証ロジックを適用。SECTION 3: ブランド別のドロップオフタイミングを分析。",
+          exampleGood: [
+            "プロンプト1：「過去3年間の修理注文頻度に基づいてロイヤルティセグメントを作成：エリート（6回以上）、頻繁（4-5回）、時々（3-4回）、休眠（2回以下）。」",
+            "プロンプト2：「作成したロイヤルティセグメントについて、まだ基本保証期間内（購入日+3年または36,000マイル未満）の顧客を特定。」",
+            "プロンプト3：「各ロイヤルティセグメントのサービス訪問ドロップオフタイミングを分析し、ホンダとアキュラブランドを比較。」"
+          ]
         },
         quickReference: {
           title: "クイックリファレンス：プロンプト構造テンプレート",
@@ -876,6 +1167,105 @@ const AudienceAgentHandbook = () => {
           </div>
         </section>
 
+        {/* Section 6: Prompt Limits */}
+        <section id="section6" className="bg-white rounded-xl shadow-sm p-8 border border-slate-200 hover-lift animate-fadeIn">
+          <div className="flex items-center gap-3 mb-3">
+            <AlertCircle className="text-orange-600" size={28} />
+            <h2 className="text-2xl font-semibold text-slate-900">
+              {t.sections.promptLimits.title}
+            </h2>
+          </div>
+          <p className="text-slate-700 mb-6">{t.sections.promptLimits.description}</p>
+
+          {/* Recommended Limits */}
+          <div className="mb-8">
+            <h3 className="text-lg font-medium text-slate-800 mb-4">
+              {t.sections.promptLimits.limitsTitle}
+            </h3>
+            <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+              {t.sections.promptLimits.limits.map((limit, idx) => (
+                <div key={idx} className="bg-gradient-to-br from-slate-50 to-slate-100 rounded-lg p-4 border border-slate-200">
+                  <div className="text-sm font-semibold text-slate-600 mb-1">{limit.label}</div>
+                  <div className="flex items-baseline gap-2 mb-2">
+                    <span className="text-2xl font-bold text-emerald-600">{limit.value}</span>
+                    <span className="text-sm text-slate-500">
+                      {language === 'en' ? `(max ${limit.max})` : `（最大 ${limit.max}）`}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600">{limit.description}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* What to Avoid */}
+          <div className="mb-8">
+            <h3 className="text-lg font-medium text-slate-800 mb-4 flex items-center gap-2">
+              <XCircle size={20} className="text-red-600" />
+              {t.sections.promptLimits.avoidTitle}
+            </h3>
+            <div className="grid md:grid-cols-2 gap-4">
+              {t.sections.promptLimits.avoidItems.map((item, idx) => (
+                <div key={idx} className="bg-red-50 border border-red-200 rounded-lg p-4">
+                  <h4 className="font-semibold text-red-900 mb-1">{item.title}</h4>
+                  <p className="text-sm text-red-800">{item.description}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* When to Break Down Prompts */}
+          <div className="mb-8">
+            <h3 className="text-lg font-medium text-slate-800 mb-3">
+              {t.sections.promptLimits.breakdownTitle}
+            </h3>
+            <p className="text-slate-600 mb-3">{t.sections.promptLimits.breakdownDescription}</p>
+            <ul className="space-y-2 bg-orange-50 border border-orange-200 rounded-lg p-4">
+              {t.sections.promptLimits.breakdownItems.map((item, idx) => (
+                <li key={idx} className="text-orange-800 flex gap-2">
+                  <span className="text-orange-600 font-bold">!</span>
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Example: Breaking Down */}
+          <div>
+            <h3 className="text-lg font-medium text-slate-800 mb-4">
+              {t.sections.promptLimits.exampleTitle}
+            </h3>
+
+            <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
+              <div className="flex items-center gap-2 mb-2">
+                <XCircle size={18} className="text-red-600" />
+                <span className="font-semibold text-red-900">
+                  {language === 'en' ? 'Too Complex:' : '複雑すぎる：'}
+                </span>
+              </div>
+              <p className="text-sm text-red-800 font-mono">
+                "{t.sections.promptLimits.exampleBad}"
+              </p>
+            </div>
+
+            <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-3">
+                <CheckCircle size={18} className="text-green-600" />
+                <span className="font-semibold text-green-900">
+                  {language === 'en' ? 'Better - Broken into steps:' : '改善 - ステップに分割：'}
+                </span>
+              </div>
+              <div className="space-y-3">
+                {t.sections.promptLimits.exampleGood.map((prompt, idx) => (
+                  <div key={idx} className="bg-white rounded p-3 border border-green-200">
+                    <p className="text-sm text-green-800 font-mono">{prompt}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
         {/* Quick Reference */}
         <section id="quickref" className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl shadow-lg p-8 text-white hover-lift animate-fadeIn">
           <h2 className="text-2xl font-semibold mb-4">
@@ -933,42 +1323,201 @@ const AudienceAgentHandbook = () => {
 
             {quizResult && (
               <div className="mt-6 space-y-4 animate-fadeIn">
+                {/* Critical Warnings (Errors) - Show first */}
+                {quizResult.warnings && quizResult.warnings.filter(w => w.type === 'error').length > 0 && (
+                  <div className="bg-red-50 border-2 border-red-300 rounded-lg p-5">
+                    <h4 className="font-semibold text-red-900 mb-3 flex items-center gap-2">
+                      <XCircle size={20} />
+                      {language === 'en' ? 'Critical Issues Detected' : '重大な問題が検出されました'}
+                    </h4>
+                    <ul className="space-y-3">
+                      {quizResult.warnings.filter(w => w.type === 'error').map((warning, idx) => (
+                        <li key={idx} className="text-red-800">
+                          <span className="font-semibold block">{warning.title}</span>
+                          <span className="text-sm">{warning.message}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Warnings */}
+                {quizResult.warnings && quizResult.warnings.filter(w => w.type === 'warning').length > 0 && (
+                  <div className="bg-orange-50 border border-orange-300 rounded-lg p-5">
+                    <h4 className="font-semibold text-orange-900 mb-3 flex items-center gap-2">
+                      <AlertCircle size={20} />
+                      {language === 'en' ? 'Warnings' : '警告'}
+                    </h4>
+                    <ul className="space-y-3">
+                      {quizResult.warnings.filter(w => w.type === 'warning').map((warning, idx) => (
+                        <li key={idx} className="text-orange-800">
+                          <span className="font-semibold block">{warning.title}</span>
+                          <span className="text-sm">{warning.message}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Complexity Metrics */}
+                {quizResult.complexityFlags && (
+                  <div className="bg-slate-100 border border-slate-300 rounded-lg p-5">
+                    <h4 className="font-semibold text-slate-900 mb-3">
+                      {language === 'en' ? 'Prompt Analysis' : 'プロンプト分析'}
+                    </h4>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                      {/* Character Count */}
+                      <div className={`p-3 rounded-lg ${
+                        quizResult.complexityFlags.charCount > quizResult.complexityFlags.charLimitError
+                          ? 'bg-red-100 text-red-800'
+                          : quizResult.complexityFlags.charCount > quizResult.complexityFlags.charLimitWarning
+                            ? 'bg-orange-100 text-orange-800'
+                            : 'bg-green-100 text-green-800'
+                      }`}>
+                        <div className="font-semibold">{language === 'en' ? 'Characters' : '文字数'}</div>
+                        <div className="text-lg font-bold">{quizResult.complexityFlags.charCount.toLocaleString()}</div>
+                        <div className="text-xs opacity-75">
+                          {language === 'en' ? `max ${quizResult.complexityFlags.charLimitError}` : `最大 ${quizResult.complexityFlags.charLimitError}`}
+                        </div>
+                      </div>
+
+                      {/* Rule Count */}
+                      <div className={`p-3 rounded-lg ${
+                        quizResult.complexityFlags.ruleCount > 6
+                          ? 'bg-red-100 text-red-800'
+                          : quizResult.complexityFlags.ruleCount > 3
+                            ? 'bg-orange-100 text-orange-800'
+                            : 'bg-green-100 text-green-800'
+                      }`}>
+                        <div className="font-semibold">{language === 'en' ? 'Rules' : 'ルール'}</div>
+                        <div className="text-lg font-bold">{quizResult.complexityFlags.ruleCount}</div>
+                        <div className="text-xs opacity-75">
+                          {language === 'en' ? 'max 5' : '最大 5'}
+                        </div>
+                      </div>
+
+                      {/* Section Count */}
+                      <div className={`p-3 rounded-lg ${
+                        quizResult.complexityFlags.sectionCount >= 2
+                          ? 'bg-red-100 text-red-800'
+                          : quizResult.complexityFlags.sectionCount === 1
+                            ? 'bg-orange-100 text-orange-800'
+                            : 'bg-green-100 text-green-800'
+                      }`}>
+                        <div className="font-semibold">{language === 'en' ? 'Sections' : 'セクション'}</div>
+                        <div className="text-lg font-bold">{quizResult.complexityFlags.sectionCount}</div>
+                        <div className="text-xs opacity-75">
+                          {language === 'en' ? 'max 0' : '最大 0'}
+                        </div>
+                      </div>
+
+                      {/* Definitions */}
+                      <div className={`p-3 rounded-lg ${
+                        quizResult.complexityFlags.definitionCount >= 3
+                          ? 'bg-red-100 text-red-800'
+                          : quizResult.complexityFlags.definitionCount >= 2
+                            ? 'bg-orange-100 text-orange-800'
+                            : 'bg-green-100 text-green-800'
+                      }`}>
+                        <div className="font-semibold">{language === 'en' ? 'Definitions' : '定義'}</div>
+                        <div className="text-lg font-bold">{quizResult.complexityFlags.definitionCount}</div>
+                        <div className="text-xs opacity-75">
+                          {language === 'en' ? 'max 2' : '最大 2'}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Meta-instructions indicator */}
+                    {quizResult.complexityFlags.hasExecutionRules && (
+                      <div className="mt-3 p-2 bg-red-100 text-red-800 rounded text-sm flex items-center gap-2">
+                        <XCircle size={16} />
+                        {language === 'en'
+                          ? 'Contains meta-instructions (EXECUTION RULES, APPROVAL GATE, etc.)'
+                          : 'メタ指示が含まれています（EXECUTION RULES、APPROVAL GATEなど）'}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Sub-prompt Breakdown Suggestion */}
+                {quizResult.complexityFlags && quizResult.complexityFlags.suggestedSubPrompts > 1 && (
+                  <div className="bg-blue-50 border border-blue-300 rounded-lg p-5">
+                    <h4 className="font-semibold text-blue-900 mb-3 flex items-center gap-2">
+                      <Sparkles size={20} />
+                      {language === 'en' ? 'Suggested Breakdown' : '推奨される分割'}
+                    </h4>
+                    <p className="text-blue-800 mb-3">
+                      {language === 'en'
+                        ? `This prompt should be broken into approximately ${quizResult.complexityFlags.suggestedSubPrompts} separate prompts for better results.`
+                        : `このプロンプトは、より良い結果を得るために約${quizResult.complexityFlags.suggestedSubPrompts}つの別々のプロンプトに分割する必要があります。`}
+                    </p>
+                    <div className="text-sm text-blue-700 bg-blue-100 rounded p-3">
+                      <p className="font-medium mb-2">{language === 'en' ? 'Recommended approach:' : '推奨されるアプローチ：'}</p>
+                      <ol className="list-decimal list-inside space-y-1">
+                        {quizResult.complexityFlags.sectionCount >= 2 && (
+                          <li>{language === 'en'
+                            ? 'Separate each SECTION into its own prompt'
+                            : '各SECTIONを独自のプロンプトに分離'}</li>
+                        )}
+                        {quizResult.complexityFlags.definitionCount >= 2 && (
+                          <li>{language === 'en'
+                            ? 'Define one concept at a time, then reference in follow-ups'
+                            : '一度に1つの概念を定義し、フォローアップで参照'}</li>
+                        )}
+                        {quizResult.complexityFlags.ruleCount > 5 && (
+                          <li>{language === 'en'
+                            ? 'Group related rules (3-5 max) into separate prompts'
+                            : '関連するルール（最大3〜5）を別々のプロンプトにグループ化'}</li>
+                        )}
+                        {quizResult.complexityFlags.hasExecutionRules && (
+                          <li>{language === 'en'
+                            ? 'Remove meta-instructions and use direct data requests'
+                            : 'メタ指示を削除し、直接的なデータリクエストを使用'}</li>
+                        )}
+                        <li>{language === 'en'
+                          ? 'Start with the simplest query, then refine iteratively'
+                          : '最も簡単なクエリから始めて、反復的に改善'}</li>
+                      </ol>
+                    </div>
+                  </div>
+                )}
+
                 {/* Score Display */}
                 <div className="bg-slate-50 rounded-lg p-6 border-2 border-slate-200">
                   <div className="flex items-center justify-between mb-3">
                     <span className="text-slate-700 font-medium">{t.sections.quiz.scoreLabel}</span>
                     <span className={`text-3xl font-bold ${
-                      quizResult.color === 'green' ? 'text-green-600' : 
-                      quizResult.color === 'blue' ? 'text-blue-600' : 
-                      quizResult.color === 'yellow' ? 'text-yellow-600' : 
+                      quizResult.color === 'green' ? 'text-green-600' :
+                      quizResult.color === 'blue' ? 'text-blue-600' :
+                      quizResult.color === 'yellow' ? 'text-yellow-600' :
                       'text-red-600'
                     }`}>
                       {quizResult.score}%
                     </span>
                   </div>
                   <div className="w-full bg-slate-200 rounded-full h-3 mb-2">
-                    <div 
+                    <div
                       className={`h-3 rounded-full transition-all duration-1000 ${
-                        quizResult.color === 'green' ? 'bg-green-600' : 
-                        quizResult.color === 'blue' ? 'bg-blue-600' : 
-                        quizResult.color === 'yellow' ? 'bg-yellow-600' : 
+                        quizResult.color === 'green' ? 'bg-green-600' :
+                        quizResult.color === 'blue' ? 'bg-blue-600' :
+                        quizResult.color === 'yellow' ? 'bg-yellow-600' :
                         'bg-red-600'
                       }`}
                       style={{ width: `${quizResult.score}%` }}
                     ></div>
                   </div>
                   <p className={`text-center font-semibold ${
-                    quizResult.color === 'green' ? 'text-green-700' : 
-                    quizResult.color === 'blue' ? 'text-blue-700' : 
-                    quizResult.color === 'yellow' ? 'text-yellow-700' : 
+                    quizResult.color === 'green' ? 'text-green-700' :
+                    quizResult.color === 'blue' ? 'text-blue-700' :
+                    quizResult.color === 'yellow' ? 'text-yellow-700' :
                     'text-red-700'
                   }`}>
                     {quizResult.rating}
                   </p>
                 </div>
 
-                {/* Strengths */}
-                {quizResult.positives.length > 0 && (
+                {/* Strengths - only show if not too complex */}
+                {!quizResult.complexityFlags?.isTooComplex && quizResult.positives.length > 0 && (
                   <div className="bg-green-50 border border-green-200 rounded-lg p-5 hover-lift transition-all">
                     <h4 className="font-semibold text-green-900 mb-3 flex items-center gap-2">
                       <CheckCircle size={20} />
@@ -985,7 +1534,7 @@ const AudienceAgentHandbook = () => {
                   </div>
                 )}
 
-                {quizResult.positives.length === 0 && (
+                {!quizResult.complexityFlags?.isTooComplex && quizResult.positives.length === 0 && (
                   <div className="bg-slate-100 border border-slate-300 rounded-lg p-5">
                     <p className="text-slate-700">{t.sections.quiz.noStrengths}</p>
                   </div>
@@ -1009,7 +1558,7 @@ const AudienceAgentHandbook = () => {
                   </div>
                 )}
 
-                {quizResult.feedback.length === 0 && (
+                {!quizResult.complexityFlags?.isTooComplex && quizResult.feedback.length === 0 && (
                   <div className="bg-green-50 border border-green-200 rounded-lg p-5 hover-lift transition-all">
                     <p className="text-green-800 font-medium">{t.sections.quiz.noImprovements}</p>
                   </div>
