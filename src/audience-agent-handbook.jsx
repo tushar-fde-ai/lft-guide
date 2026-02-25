@@ -518,7 +518,7 @@ const AudienceAgentHandbook = () => {
             <img
               src="/lufthansa_logo.png"
               alt="Lufthansa"
-              className="h-16"
+              className="h-24"
             />
           </div>
         </div>
